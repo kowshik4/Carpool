@@ -1,5 +1,6 @@
 import streamlit as st
 import sqlite3
+import pandas as pd
 from datetime import datetime
 
 # Database setup
@@ -17,14 +18,16 @@ def init_db():
     """)
     # Create rides table
     c.execute("""
-        CREATE TABLE IF NOT EXISTS rides (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            pickup TEXT NOT NULL,
-            dropoff TEXT NOT NULL,
-            datetime TEXT NOT NULL,
-            FOREIGN KEY (username) REFERENCES users(username)
-        )
+    CREATE TABLE IF NOT EXISTS rides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        driver_name TEXT NOT NULL,
+        pickup_location TEXT NOT NULL,
+        dropoff_location TEXT NOT NULL,
+        ride_date DATE NOT NULL,
+        ride_time TIME NOT NULL,
+        seats_available INTEGER NOT NULL,
+        price INTEGER NOT NULL
+    )
     """)
     conn.commit()
     conn.close()
@@ -129,6 +132,64 @@ def search_rides_ui():
         else:
             st.warning("No matching rides found.")
 
+def get_all_rides():
+    conn = sqlite3.connect("carpooling.db")  # Connect to the database
+    query = """
+    SELECT *
+    FROM rides
+    """
+    rides_df = pd.read_sql_query(query, conn)  # Fetch rides into a DataFrame
+    conn.close()
+    return rides_df
+
+# UI to display all available rides
+def display_all_rides_ui():
+    st.subheader("Available Rides")
+    rides_df = get_all_rides()
+    if not rides_df.empty:
+        st.dataframe(rides_df, use_container_width=True)  # Display rides in a table
+    else:
+        st.info("No rides available at the moment.")
+
+# Function to post a ride
+def post_ride_ui():
+    st.subheader("Post a Ride")
+    with st.form("post_ride_form"):
+        driver_name = st.text_input("Driver Name")
+        pickup_location = st.text_input("Pickup Location")
+        dropoff_location = st.text_input("Dropoff Location")
+        ride_date = st.date_input("Ride Date")
+        ride_time = st.time_input("Ride Time")
+        seats_available = st.number_input("Seats Available", min_value=1, max_value=10, step=1)
+        price = st.number_input("Price ($)", min_value=1, step=1)
+
+        submit_button = st.form_submit_button("Post Ride")
+    
+    if submit_button:
+        if driver_name and pickup_location and dropoff_location:
+            save_ride(driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price)
+            st.success("Ride posted successfully!")
+        else:
+            st.error("Please fill in all required fields.")
+
+# Function to save ride to the database
+def save_ride(driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price):
+    conn = sqlite3.connect("carpooling.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT INTO rides (driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price))
+    conn.commit()
+    conn.close()
+
+# Function to search for rides (Stub)
+def search_rides_ui():
+    st.subheader("Search for Rides")
+    st.write("This feature allows users to search for specific rides. (Implementation Pending)")
+
+
+
 # Log out a user
 def logout_user():
     if st.sidebar.button("Logout"):
@@ -155,10 +216,17 @@ def main():
         # Show logged-in content
         st.sidebar.write(f"Logged in as: {st.session_state['username']}")
         logout_user()
-        action = st.sidebar.selectbox("Choose an Action", ["Post a Ride", "Search for Rides"])
-        if action == "Post a Ride":
+
+        st.sidebar.title("Menu")
+        menu_options = ["View Rides", "Post Ride", "Search Rides"]
+        choice = st.sidebar.radio("Select an action:", menu_options)
+
+        # Display the selected action
+        if choice == "View Rides":
+            display_all_rides_ui()
+        elif choice == "Post Ride":
             post_ride_ui()
-        elif action == "Search for Rides":
+        elif choice == "Search Rides":
             search_rides_ui()
     else:
         # Show login or registration page
