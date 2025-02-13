@@ -9,6 +9,7 @@ DB_FILE = "carpooling.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+
     # Create users table
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -26,7 +27,18 @@ def init_db():
         ride_date DATE NOT NULL,
         ride_time TIME NOT NULL,
         seats_available INTEGER NOT NULL,
-        price INTEGER NOT NULL
+        price INTEGER NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1
+    )
+    """)
+    # Create bookings table
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS bookings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ride_id INTEGER NOT NULL,
+        username TEXT NOT NULL,
+        FOREIGN KEY (ride_id) REFERENCES rides (id),
+        FOREIGN KEY (username) REFERENCES users (username)
     )
     """)
     conn.commit()
@@ -54,22 +66,39 @@ def authenticate_user(username, password):
     return user is not None
 
 # Post a ride
-def post_ride(username, pickup, dropoff, datetime_str):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT INTO rides (username, pickup, dropoff, datetime) VALUES (?, ?, ?, ?)",
-              (username, pickup, dropoff, datetime_str))
-    conn.commit()
-    conn.close()
-    st.success("Ride posted successfully!")
+def post_ride(username, pickup, dropoff, datetime_str, seats_available, price):
+    try:
+        # Convert datetime string to date and time
+        ride_datetime = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+        ride_date = ride_datetime.date().strftime("%Y-%m-%d")  # YYYY-MM-DD
+        ride_time = ride_datetime.time().strftime("%H:%M:%S")  # HH:MM:SS
+
+        with sqlite3.connect(DB_FILE) as conn:
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO rides (driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price, active) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            """, (username, pickup, dropoff, ride_date, ride_time, seats_available, price))
+            conn.commit()
+
+        st.success("✅ Ride posted successfully!")
+        st.write(f"Debug: Ride details - {username}, {pickup}, {dropoff}, {ride_date}, {ride_time}, {seats_available}, {price}")
+
+    except ValueError:
+        st.error("❌ Invalid date format! Please use YYYY-MM-DD HH:MM.")
+        st.write(f"Debug: ValueError - {datetime_str}")
+
+    except sqlite3.Error as e:
+        st.error(f"❌ Database error: {e}")
+        st.write(f"Debug: sqlite3.Error - {e}")
 
 # Search for rides
 def search_rides(search_pickup, search_dropoff):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
-        SELECT username, pickup, dropoff, datetime FROM rides
-        WHERE pickup LIKE ? AND dropoff LIKE ?
+        SELECT driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price FROM rides
+        WHERE pickup_location LIKE ? AND dropoff_location LIKE ? AND active = 1
     """, (f"%{search_pickup}%", f"%{search_dropoff}%"))
     results = c.fetchall()
     conn.close()
@@ -110,50 +139,6 @@ def register_user_ui():
 # Post a ride
 def post_ride_ui():
     st.subheader("Post a Ride")
-    pickup = st.text_input("Pickup Location")
-    dropoff = st.text_input("Drop-off Location")
-    date = st.date_input("Date")
-    time = st.time_input("Time")
-    if st.button("Post Ride"):
-        datetime_str = datetime.combine(date, time).isoformat()
-        post_ride(st.session_state["username"], pickup, dropoff, datetime_str)
-
-# Search for rides
-def search_rides_ui():
-    st.subheader("Search for Rides")
-    search_pickup = st.text_input("Enter Pickup Location")
-    search_dropoff = st.text_input("Enter Drop-off Location")
-    if st.button("Search"):
-        results = search_rides(search_pickup, search_dropoff)
-        if results:
-            st.write("Matching Rides:")
-            for ride in results:
-                st.write(f"Driver: {ride[0]}, Pickup: {ride[1]}, Drop-off: {ride[2]}, Date & Time: {ride[3]}")
-        else:
-            st.warning("No matching rides found.")
-
-def get_all_rides():
-    conn = sqlite3.connect("carpooling.db")  # Connect to the database
-    query = """
-    SELECT *
-    FROM rides
-    """
-    rides_df = pd.read_sql_query(query, conn)  # Fetch rides into a DataFrame
-    conn.close()
-    return rides_df
-
-# UI to display all available rides
-def display_all_rides_ui():
-    st.subheader("Available Rides")
-    rides_df = get_all_rides()
-    if not rides_df.empty:
-        st.dataframe(rides_df, use_container_width=True)  # Display rides in a table
-    else:
-        st.info("No rides available at the moment.")
-
-# Function to post a ride
-def post_ride_ui():
-    st.subheader("Post a Ride")
     with st.form("post_ride_form"):
         driver_name = st.text_input("Driver Name")
         pickup_location = st.text_input("Pickup Location")
@@ -176,19 +161,85 @@ def post_ride_ui():
 def save_ride(driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price):
     conn = sqlite3.connect("carpooling.db")
     cursor = conn.cursor()
-    cursor.execute("""
-    INSERT INTO rides (driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price))
-    conn.commit()
+    try:
+        cursor.execute("""
+        INSERT INTO rides (driver_name, pickup_location, dropoff_location, ride_date, ride_time, seats_available, price, active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+        """, (driver_name, pickup_location, dropoff_location, ride_date, ride_time.strftime("%H:%M:%S"), seats_available, price))
+        conn.commit()
+        st.write(f"Debug: Ride saved - {driver_name}, {pickup_location}, {dropoff_location}, {ride_date}, {ride_time.strftime('%H:%M:%S')}, {seats_available}, {price}")
+    except sqlite3.Error as e:
+        st.error(f"❌ Database error: {e}")
+        st.write(f"Debug: sqlite3.Error - {e}")
+    finally:
+        conn.close()
+
+# Function to get all rides
+def get_all_rides():
+    conn = sqlite3.connect(DB_FILE)
+    query = """
+    SELECT 
+        id AS "Ride ID", 
+        driver_name AS "Driver", 
+        pickup_location AS "Pickup Location", 
+        dropoff_location AS "Dropoff Location", 
+        ride_date AS "Date", 
+        ride_time AS "Time", 
+        seats_available AS "Seats Available", 
+        price AS "Price ($)"
+    FROM rides
+    WHERE active = 1
+    """
+    rides_df = pd.read_sql_query(query, conn)
     conn.close()
+    return rides_df
+
+# Function to display all rides
+def display_all_rides_ui():
+    st.subheader("Available Rides")
+    rides_df = get_all_rides()
+    if not rides_df.empty:
+        st.dataframe(rides_df, use_container_width=True)
+    else:
+        st.info("No rides available at the moment.")
 
 # Function to search for rides (Stub)
 def search_rides_ui():
     st.subheader("Search for Rides")
-    st.write("This feature allows users to search for specific rides. (Implementation Pending)")
 
+    # User input fields for filtering rides
+    pickup = st.text_input("Enter Pickup Location:")
+    dropoff = st.text_input("Enter Dropoff Location:")
+    ride_date = st.date_input("Select Ride Date:")
 
+    if st.button("Search Rides"):
+        conn = sqlite3.connect("carpooling.db")
+        query = """
+        SELECT 
+            id AS "Ride ID", 
+            driver_name AS "Driver", 
+            pickup_location AS "Pickup Location", 
+            dropoff_location AS "Dropoff Location", 
+            ride_date AS "Date", 
+            ride_time AS "Time", 
+            seats_available AS "Seats Available", 
+            price AS "Price ($)"
+        FROM rides 
+        WHERE pickup_location LIKE ? 
+        AND dropoff_location LIKE ? 
+        AND ride_date = ?
+        """
+
+        # Execute query with parameters
+        df = pd.read_sql_query(query, conn, params=('%' + pickup + '%', '%' + dropoff + '%', ride_date))
+        conn.close()
+
+        # Display results
+        if not df.empty:
+            st.write("### Available Rides:")
+            st.dataframe(df)
+        else:
+            st.warning("No rides found for the given search criteria.")
 
 # Log out a user
 def logout_user():
@@ -202,6 +253,106 @@ def logout_user():
         st.session_state["logged_out"] = False  # Reset the flag
         st.experimental_set_query_params()  # Clear URL params
         st.rerun()  # Simulate refresh
+
+# Function to book a ride
+def book_ride(ride_id, username):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        # Check if there are available seats
+        cursor.execute("SELECT seats_available FROM rides WHERE id = ?", (ride_id,))
+        seats_available = cursor.fetchone()[0]
+        if seats_available > 0:
+            # Insert booking
+            cursor.execute("INSERT INTO bookings (ride_id, username) VALUES (?, ?)", (ride_id, username))
+            # Update seats available
+            cursor.execute("UPDATE rides SET seats_available = seats_available - 1 WHERE id = ?", (ride_id,))
+            conn.commit()
+
+            # Check if seats are now zero and set the ride as inactive if so
+            cursor.execute("SELECT seats_available FROM rides WHERE id = ?", (ride_id,))
+            seats_available = cursor.fetchone()[0]
+            if seats_available == 0:
+                cursor.execute("UPDATE rides SET active = 0 WHERE id = ?", (ride_id,))
+                conn.commit()
+
+            st.success("Ride booked successfully!")
+        else:
+            st.error("No seats available for this ride.")
+    except sqlite3.Error as e:
+        st.error(f"Database error: {e}")
+    finally:
+        conn.close()
+
+def book_ride_ui():
+    st.subheader("Book a Ride")
+    ride_id = st.number_input("Enter Ride ID", min_value=1, step=1)
+    if st.button("Book Ride"):
+        if "username" in st.session_state and st.session_state["username"]:
+            book_ride(ride_id, st.session_state["username"])
+        else:
+            st.error("You need to be logged in to book a ride.")
+
+def get_user_rides(username):
+    conn = sqlite3.connect(DB_FILE)
+    query = """
+    SELECT 
+        id AS "Ride ID", 
+        driver_name AS "Driver", 
+        pickup_location AS "Pickup Location", 
+        dropoff_location AS "Dropoff Location", 
+        ride_date AS "Date", 
+        ride_time AS "Time", 
+        seats_available AS "Seats Available", 
+        price AS "Price ($)"
+    FROM rides
+    WHERE driver_name = ?
+    """
+    rides_df = pd.read_sql_query(query, conn, params=(username,))
+    conn.close()
+    return rides_df
+
+def get_user_bookings(username):
+    conn = sqlite3.connect(DB_FILE)
+    query = """
+    SELECT 
+        b.id AS "Booking ID", 
+        r.id AS "Ride ID", 
+        r.driver_name AS "Driver", 
+        r.pickup_location AS "Pickup Location", 
+        r.dropoff_location AS "Dropoff Location", 
+        r.ride_date AS "Date", 
+        r.ride_time AS "Time", 
+        r.price AS "Price ($)"
+    FROM bookings b
+    JOIN rides r ON b.ride_id = r.id
+    WHERE b.username = ?
+    """
+    bookings_df = pd.read_sql_query(query, conn, params=(username,))
+    conn.close()
+    return bookings_df
+
+def ride_history_ui():
+    st.subheader("Your Ride History")
+    
+    if "username" in st.session_state and st.session_state["username"]:
+        username = st.session_state["username"]
+        
+        st.write("### Your Posted Rides")
+        user_rides_df = get_user_rides(username)
+        if not user_rides_df.empty:
+            st.dataframe(user_rides_df, use_container_width=True)
+        else:
+            st.info("You have not posted any rides.")
+        
+        st.write("### Your Booked Rides")
+        user_bookings_df = get_user_bookings(username)
+        if not user_bookings_df.empty:
+            st.dataframe(user_bookings_df, use_container_width=True)
+        else:
+            st.info("You have not booked any rides.")
+    else:
+        st.error("You need to be logged in to view your ride history.")
 
 # Main application logic
 def main():
@@ -218,7 +369,7 @@ def main():
         logout_user()
 
         st.sidebar.title("Menu")
-        menu_options = ["View Rides", "Post Ride", "Search Rides"]
+        menu_options = ["View Rides", "Post Ride", "Search Rides", "Book Ride", "Ride History"]
         choice = st.sidebar.radio("Select an action:", menu_options)
 
         # Display the selected action
@@ -228,6 +379,10 @@ def main():
             post_ride_ui()
         elif choice == "Search Rides":
             search_rides_ui()
+        elif choice == "Book Ride":
+            book_ride_ui()
+        elif choice == "Ride History":
+            ride_history_ui()
     else:
         # Show login or registration page
         st.sidebar.title("Navigation")
